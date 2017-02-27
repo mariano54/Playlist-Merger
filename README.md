@@ -1,3 +1,8 @@
+# Playlist Merger
+
+Merges playlists by grabbing the top songs of each user. Requires Access Token
+
+
 # Spotify Accounts Authentication Examples
 
 This project contains basic demos showing the different OAuth 2.0 flows for [authenticating against the Spotify Web API](https://developer.spotify.com/web-api/authorization-guide/).

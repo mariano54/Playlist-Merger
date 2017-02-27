@@ -9,12 +9,15 @@
 
 var express = require('express'); // Express web server framework
 var request = require('request'); // "Request" library
+var bodyParser = require('body-parser')
+
 var querystring = require('querystring');
 var cookieParser = require('cookie-parser');
 
-var client_id = 'CLIENT_ID'; // Your client id
-var client_secret = 'CLIENT_SECRET'; // Your secret
-var redirect_uri = 'REDIRECT_URI'; // Your redirect uri
+var client_id = ''; // Your client id
+var client_secret = ''; // Your secret
+var accessToken = ""
+var redirect_uri = 'http://localhost:8888/callback'; // Your redirect uri
 
 /**
  * Generates a random string containing numbers and letters
@@ -34,9 +37,142 @@ var generateRandomString = function(length) {
 var stateKey = 'spotify_auth_state';
 
 var app = express();
+app.use(bodyParser.json())
+
+
+
+function createPlaylist() {
+  var options = {
+    url: 'https://api.spotify.com/v1/users/houseofcard525/playlists',
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + accessToken},
+    json: true,
+    body: JSON.stringify({
+      name: '525 Top Tracks',
+      public: false,
+      collaborative: true
+    }),
+  };
+  // use the access token to access the Spotify Web API
+  request.get(options, function(error, response, body) {
+    console.log("Created playlist.", response);
+  });
+}
+
+function addTracks(uris, cb) {
+  var options = {
+    url: 'https://api.spotify.com/v1/users/houseofcard525/playlists/5XvJFSNwqhzWgjqgCLn035/tracks',
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + accessToken},
+    json: true,
+    body: JSON.stringify({
+      uris: uris
+    }),
+  };
+  // use the access token to access the Spotify Web API
+  request.get(options, function(error, response, body) {
+    cb();
+  });
+}
+
+function getTracks (currentTracks, url, offset, limit, cb) {
+  if (url === null || url === undefined) {
+    url = 'https://api.spotify.com/v1/users/houseofcard525/playlists/5XvJFSNwqhzWgjqgCLn035/tracks?offeset='
+    + offset + '&limit=' + limit;
+  }
+  var options = {
+    url: url,
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer ' + accessToken},
+    json: true,
+  }
+  request.get(options, function(error, response, body) {
+    for (var track of body.items) {
+      currentTracks.push(track);
+    }
+    console.log('added', body.items.length, 'tracks');
+    if (body.next !== null) {
+      getTracks(currentTracks, body.next, 0, 0, cb);
+    } else {
+      getSnapshotId(function(snapshotId) {
+        console.log('id', snapshotId);
+        cb(currentTracks, snapshotId);
+      });
+    }
+  });
+}
+
+function getSnapshotId (cb) {
+  var options = {
+    url: 'https://api.spotify.com/v1/users/houseofcard525/playlists/5XvJFSNwqhzWgjqgCLn035/',
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer ' + accessToken},
+    json: true,
+  }
+  request.get(options, function(error, response, body) {
+      cb(body.snapshot_id);
+  });
+}
+
+function removeDuplicates() {
+    var duplicated = {}
+    var duplicatedUris = {}
+    getTracks([], null, 0, 100, function(tracks, snapshotId) {
+      for (i = 0; i < tracks.length; i++) {
+        var current = tracks[i].track;
+        if (duplicated[current.id] !== undefined) {
+          continue;
+        }
+        for (j = i; j < tracks.length; j++) {
+          if (i === j) continue;
+          var second = tracks[j]
+          if (tracks[i].track.id === tracks[j].track.id) {
+            if (duplicated[tracks[j].track.id] === undefined) {
+              duplicated[tracks[j].track.id] = [];
+              duplicatedUris[tracks[j].track.id] = tracks[j].track.uri;
+            }
+            duplicated[tracks[j].track.id].push(j);
+          }
+        }
+      }
+      duplicatedObjects = [];
+      for (var trackId in duplicated) {
+        if (duplicated.hasOwnProperty(trackId)) {
+          duplicatedObjects.push({
+            uri: duplicatedUris[trackId],
+            positions: duplicated[trackId],
+          });
+        }
+      }
+
+       var toDelete = {
+         url: 'https://api.spotify.com/v1/users/houseofcard525/playlists/5XvJFSNwqhzWgjqgCLn035/tracks',
+         method: 'delete',
+         headers: { 'Authorization': 'Bearer ' + accessToken},
+         json: true,
+         body: {
+            tracks: duplicatedObjects,
+            snapshot_id: snapshotId
+         }
+       }
+       console.log(toDelete);
+       request.get(toDelete, function(error, response, body) {
+         console.log(error, body);
+       });
+    });
+}
 
 app.use(express.static(__dirname + '/public'))
    .use(cookieParser());
+
+app.post('/tracks', function(req, res) {
+  console.log(req.body.uris);
+  addTracks(req.body.uris, removeDuplicates);
+  // Remove duplicates
+  res.send({
+    ok: 'ok',
+  })
+});
 
 app.get('/login', function(req, res) {
 
@@ -44,7 +180,9 @@ app.get('/login', function(req, res) {
   res.cookie(stateKey, state);
 
   // your application requests authorization
-  var scope = 'user-read-private user-read-email';
+  var scope = 'user-read-private user-read-email user-top-read user-library-read'
+      + ' playlist-read-private playlist-read-collaborative playlist-modify-public'
+      + ' playlist-modify-private';
   res.redirect('https://accounts.spotify.com/authorize?' +
     querystring.stringify({
       response_type: 'code',
@@ -102,7 +240,7 @@ app.get('/callback', function(req, res) {
         });
 
         // we can also pass the token to the browser to make requests from there
-        res.redirect('/#' +
+        res.redirect('/tracks.html#' +
           querystring.stringify({
             access_token: access_token,
             refresh_token: refresh_token
